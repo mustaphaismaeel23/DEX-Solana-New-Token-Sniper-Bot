@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS positions (
     peak_price_sol REAL NOT NULL DEFAULT 0,
     trigger_active INTEGER NOT NULL DEFAULT 0,
     buy_signature TEXT,
+    owner_wallet TEXT,
     status TEXT NOT NULL DEFAULT 'OPEN',
     close_reason TEXT,
     sell_signature TEXT,
@@ -104,6 +105,9 @@ def init_db():
             "INSERT OR IGNORE INTO bot_control (id, stop_requested, updated_at) VALUES (1, 0, ?)",
             (int(time.time()),),
         )
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(positions)")}
+        if "owner_wallet" not in columns:
+            conn.execute("ALTER TABLE positions ADD COLUMN owner_wallet TEXT")
         conn.execute(
             "INSERT OR IGNORE INTO circuit_breaker_state (id, state, loss_day) VALUES (1, 'NORMAL', ?)",
             (time.strftime("%Y-%m-%d"),),
@@ -241,8 +245,9 @@ def record_wallet_position(action, payload):
     """Persist a position only after the browser wallet reports a signature."""
     mint = payload.get("mint")
     signature = payload.get("signature")
+    wallet = payload.get("wallet")
     quote = payload.get("quote") or {}
-    if not mint or not signature:
+    if not mint or not signature or not wallet:
         return False
 
     with sqlite3.connect(DB_PATH) as conn:
@@ -254,9 +259,9 @@ def record_wallet_position(action, payload):
             entry_price = sol_amount / token_amount
             conn.execute(
                 """INSERT OR REPLACE INTO positions
-                   (mint, source, opened_at, entry_price_sol, token_amount, peak_price_sol, buy_signature, status)
-                   VALUES (?,?,?,?,?,?,?,?)""",
-                (mint, "jupiter-wallet", int(time.time()), entry_price, token_amount, entry_price, signature, "OPEN"),
+                         (mint, source, opened_at, entry_price_sol, token_amount, peak_price_sol, buy_signature, owner_wallet, status)
+                         VALUES (?,?,?,?,?,?,?,?,?)""",
+                     (mint, "jupiter-wallet", int(time.time()), entry_price, token_amount, entry_price, signature, wallet, "OPEN"),
             )
             return True
 
@@ -264,9 +269,9 @@ def record_wallet_position(action, payload):
             cursor = conn.execute(
                 """UPDATE positions SET status='CLOSED', close_reason='wallet sell',
                    sell_signature=?, closed_at=? WHERE id=(
-                     SELECT id FROM positions WHERE mint=? AND status='OPEN' ORDER BY opened_at DESC LIMIT 1
+                         SELECT id FROM positions WHERE mint=? AND owner_wallet=? AND status='OPEN' ORDER BY opened_at DESC LIMIT 1
                    )""",
-                (signature, int(time.time()), mint),
+                     (signature, int(time.time()), mint, wallet),
             )
             return cursor.rowcount > 0
 
@@ -731,25 +736,35 @@ def swap_transaction():
 
 @app.get("/api/dashboard")
 def dashboard():
+    wallet = request.args.get("wallet")
+    if wallet:
+        position_filter = "owner_wallet=?"
+        position_params = (wallet,)
+    else:
+        position_filter = "1=0"
+        position_params = ()
     positions = query(
         """SELECT id, mint, source, opened_at, entry_price_sol, token_amount,
                   peak_price_sol, trigger_active, buy_signature
-           FROM positions WHERE status='OPEN' ORDER BY opened_at DESC"""
+           FROM positions WHERE status='OPEN' AND """ + position_filter + " ORDER BY opened_at DESC",
+        position_params,
     )
     closed = query(
         """SELECT mint, source, opened_at, entry_price_sol, peak_price_sol,
                   close_reason, sell_signature, closed_at
-           FROM positions WHERE status='CLOSED' ORDER BY closed_at DESC LIMIT 12"""
+           FROM positions WHERE status='CLOSED' AND """ + position_filter + " ORDER BY closed_at DESC LIMIT 12",
+        position_params,
     )
     skips = query(
         """SELECT ts, mint, source, reason FROM skipped_tokens
            ORDER BY ts DESC LIMIT 12"""
     )
     counts = query(
-        """SELECT
-             (SELECT COUNT(*) FROM positions WHERE status='OPEN') AS open_count,
-             (SELECT COUNT(*) FROM positions WHERE status='CLOSED') AS closed_count,
-             (SELECT COUNT(*) FROM skipped_tokens) AS skip_count"""
+           f"""SELECT
+               (SELECT COUNT(*) FROM positions WHERE status='OPEN' AND {position_filter}) AS open_count,
+               (SELECT COUNT(*) FROM positions WHERE status='CLOSED' AND {position_filter}) AS closed_count,
+               (SELECT COUNT(*) FROM skipped_tokens) AS skip_count""",
+           position_params + position_params,
     )
     
     # Provide mock data if database is empty/missing

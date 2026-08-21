@@ -5,10 +5,12 @@ import Overview from './pages/Overview'
 import Positions from './pages/Positions'
 import Alerts from './pages/Alerts'
 import Scanner from './pages/Scanner'
+import { useWallet } from './hooks/useWallet'
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 function AppContent(){
+  const { wallet } = useWallet()
   const [route, setRoute] = useState('overview')
   const [data, setData] = useState(null)
   const [error, setError] = useState(null)
@@ -17,7 +19,10 @@ function AppContent(){
     let mounted = true
     async function fetchData(){
       try{
-        const res = await fetch(`${API}/api/dashboard`, { 
+        const dashboardUrl = wallet
+          ? `${API}/api/dashboard?wallet=${encodeURIComponent(wallet)}`
+          : `${API}/api/dashboard`
+        const res = await fetch(dashboardUrl, { 
           method: 'GET',
           headers: { 'Content-Type': 'application/json' }
         })
@@ -37,7 +42,7 @@ function AppContent(){
     fetchData()
     const id = setInterval(fetchData, 5000)
     return () => { mounted = false; clearInterval(id) }
-  }, [])
+  }, [wallet])
 
   return (
     <div className="min-h-screen bg-gray-900 text-gray-100">
