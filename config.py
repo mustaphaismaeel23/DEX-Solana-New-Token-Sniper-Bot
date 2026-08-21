@@ -25,6 +25,7 @@ class Settings:
     ALLOWED_DEXES: tuple[str, ...] = tuple(
         item.strip().lower() for item in _get("ALLOWED_DEXES", "pumpfun,pumpswap").split(",") if item.strip()
     )
+    PUMPSWAP_PROGRAM_ID: str = _get("PUMPSWAP_PROGRAM_ID", "")
     PUMPPORTAL_WS_URL: str = _get("PUMPPORTAL_WS_URL", "wss://pumpportal.fun/api/data")
 
     # --- Buy sizing ---

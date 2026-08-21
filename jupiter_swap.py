@@ -84,19 +84,26 @@ async def get_token_price_in_sol(client: httpx.AsyncClient, mint: str, probe_lam
         return None
 
 
-async def execute_swap(client: httpx.AsyncClient, rpc: AsyncClient, keypair: Keypair, quote: dict) -> str:
+async def build_swap_transaction(client: httpx.AsyncClient, owner_pubkey, quote: dict) -> dict:
     route_ok, route_reason = validate_quote_routes(quote)
     if not route_ok:
         raise RuntimeError(f"DEX allowlist rejected quote: {route_reason}")
-    swap_resp = await client.post(JUPITER_SWAP_URL, json={
+    response = await client.post(JUPITER_SWAP_URL, json={
         "quoteResponse": quote,
-        "userPublicKey": str(keypair.pubkey()),
+        "userPublicKey": str(owner_pubkey),
         "wrapAndUnwrapSol": True,
         "dynamicComputeUnitLimit": True,
         "prioritizationFeeLamports": "auto",
     }, timeout=20)
-    swap_resp.raise_for_status()
-    swap_tx_b64 = swap_resp.json()["swapTransaction"]
+    response.raise_for_status()
+    return response.json()
+
+
+async def execute_swap(client: httpx.AsyncClient, rpc: AsyncClient, keypair: Keypair, quote: dict) -> str:
+    route_ok, route_reason = validate_quote_routes(quote)
+    if not route_ok:
+        raise RuntimeError(f"DEX allowlist rejected quote: {route_reason}")
+    swap_tx_b64 = (await build_swap_transaction(client, keypair.pubkey(), quote))["swapTransaction"]
 
     raw_tx = VersionedTransaction.from_bytes(base64.b64decode(swap_tx_b64))
     signed_tx = VersionedTransaction(raw_tx.message, [keypair])

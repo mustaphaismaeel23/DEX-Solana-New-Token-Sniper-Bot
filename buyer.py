@@ -8,6 +8,7 @@ from dataclasses import replace
 from risk_engine import decision_from_safety_report
 from circuit_breaker import CircuitBreaker, get_circuit_breaker
 from dex_allowlist import validate_discovery, validate_pool
+from security_adapters import PumpSwapLiquiditySecurityProvider, JupiterRpcSellSimulator
 from jupiter_swap import get_sol_balance, buy_token
 from database import already_seen, record_skip, open_position, open_position_count
 from notifier import notify
@@ -77,7 +78,12 @@ async def try_buy(client: httpx.AsyncClient, rpc: AsyncClient, keypair, candidat
         return
 
     try:
-        risk_data = await build_risk_data(client, rpc, mint, candidate)
+        risk_data = await build_risk_data(
+            client, rpc, mint, candidate,
+            liquidity_provider=PumpSwapLiquiditySecurityProvider(),
+            sell_simulator=JupiterRpcSellSimulator(),
+            owner_pubkey=keypair.pubkey(),
+        )
         pool_ok, pool_reason = validate_pool(candidate, risk_data)
         if not pool_ok:
             record_skip(mint, source, pool_reason)

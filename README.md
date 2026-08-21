@@ -116,6 +116,9 @@ Fill in `.env`:
   ```
   Fund it with only what you're fully prepared to lose.
 - **TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID** — optional, via @BotFather.
+- **PUMPSWAP_PROGRAM_ID** — required for the on-chain PumpSwap pool-owner
+  adapter. Leave live trading disabled until this is verified against the
+  current PumpSwap deployment.
 
 ## Dashboard
 
@@ -210,6 +213,9 @@ WantedBy=multi-user.target
   sell simulation. Supply `categoryScores.liquidity_security` and
   `sell_simulation_passed=true` through the `risk_data` adapter before live
   buys can be approved.
+- **Sell simulation requires token inventory.** Configure a provider or probe
+  workflow that supplies `sell_simulation_token_amount`; a quote alone is not
+  treated as a successful sell simulation.
 - **PumpPortal migration detection is best-effort.** Its event names and
   payload fields can change — verify migration events during dry run.
 - **Price/liquidity can vanish between detection and your buy landing.**

@@ -30,7 +30,7 @@ def test_entry_pipeline_sizes_only_after_all_gates(monkeypatch):
     monkeypatch.setattr(buyer, "open_position_count", lambda: 0)
     monkeypatch.setattr(buyer, "record_skip", lambda *args: calls.setdefault("skip", args))
     monkeypatch.setattr(buyer, "run_all_checks", lambda *args: asyncio.sleep(0, result=(True, "ok")))
-    monkeypatch.setattr(buyer, "build_risk_data", lambda *args: asyncio.sleep(0, result=GOOD_DATA))
+    monkeypatch.setattr(buyer, "build_risk_data", lambda *args, **kwargs: asyncio.sleep(0, result=GOOD_DATA))
     monkeypatch.setattr(buyer, "get_sol_balance", lambda *args: asyncio.sleep(0, result=1.0))
     monkeypatch.setattr(buyer, "open_position", lambda *args, **kwargs: None)
     monkeypatch.setattr(buyer, "notify", lambda *args: asyncio.sleep(0))

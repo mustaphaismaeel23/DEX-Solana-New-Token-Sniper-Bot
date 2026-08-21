@@ -21,7 +21,8 @@ def _bounded_score(value: float) -> float:
 
 
 async def build_risk_data(client: httpx.AsyncClient, rpc: AsyncClient, mint: str,
-                          candidate: dict | None = None) -> dict:
+                          candidate: dict | None = None, liquidity_provider=None,
+                          sell_simulator=None, owner_pubkey=None) -> dict:
     """Normalize live provider data for the risk engine.
 
     Provider-specific fields are kept at this boundary. Missing proof is left
@@ -37,6 +38,15 @@ async def build_risk_data(client: httpx.AsyncClient, rpc: AsyncClient, mint: str
     if not pairs:
         raise ValueError("no pair data")
     pair = max(pairs, key=lambda item: float((item.get("liquidity") or {}).get("usd") or 0))
+    liquidity_security_score = provided_scores.get("liquidity_security")
+    if liquidity_provider is not None:
+        pool_address = pair.get("pairAddress")
+        if not pool_address:
+            raise ValueError("PumpSwap pool address unavailable")
+        security_result = await liquidity_provider.verify(rpc, pool_address)
+        if not security_result.verified or security_result.score is None:
+            raise ValueError(security_result.reason)
+        liquidity_security_score = security_result.score
 
     liquidity = float((pair.get("liquidity") or {}).get("usd") or 0)
     volume = float((pair.get("volume") or {}).get("h24") or 0)
@@ -63,6 +73,16 @@ async def build_risk_data(client: httpx.AsyncClient, rpc: AsyncClient, mint: str
     quote = await get_quote(client, settings.WSOL_MINT, mint, 10_000_000, settings.SLIPPAGE_BPS)
     price_impact = float(quote.get("priceImpactPct") or 0)
     route_available = int(quote.get("outAmount") or 0) > 0
+    if sell_simulator is not None:
+        simulation_amount = candidate.get("sell_simulation_token_amount")
+        if not owner_pubkey or not isinstance(simulation_amount, int):
+            raise ValueError("sell simulation input unavailable")
+        simulated, simulation_reason = await sell_simulator.simulate(
+            client, rpc, mint, simulation_amount, owner_pubkey
+        )
+        if not simulated:
+            raise ValueError(simulation_reason)
+        sell_simulation_passed = True
 
     data.update({
         "dex": pair.get("dexId"),
@@ -76,7 +96,7 @@ async def build_risk_data(client: httpx.AsyncClient, rpc: AsyncClient, mint: str
             "liquidity": _bounded_score(liquidity / settings.MIN_LIQUIDITY_USD * 100),
             "holder_concentration": _bounded_score((1 - top_pct / 100) * 100),
             # DexScreener does not prove LP locking; accept only an explicit provider field.
-            "liquidity_security": provided_scores.get("liquidity_security"),
+            "liquidity_security": liquidity_security_score,
             "contract_security": 100 if authorities_safe else 0,
             "volume_activity": _bounded_score(min(volume / max(settings.MIN_24H_VOLUME_USD, 1), 2) * 50),
             "token_pool_age": _bounded_score((age_seconds or 0) / max(settings.MIN_TOKEN_AGE_SECONDS, 1) * 100),
