@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react'
+import React, { useState, useCallback, useEffect } from 'react'
 
 const WalletContext = React.createContext()
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8000'
@@ -9,6 +9,15 @@ export function WalletProvider({ children }){
   const [balanceSource, setBalanceSource] = useState('unknown')
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    setWallet(null)
+    setBalance(0)
+    setBalanceSource('unknown')
+    if (window.solana?.isConnected) {
+      window.solana.disconnect().catch(() => {})
+    }
+  }, [])
 
   const connectWallet = useCallback(async () => {
     setLoading(true)
