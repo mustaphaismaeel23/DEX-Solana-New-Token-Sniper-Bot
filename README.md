@@ -142,6 +142,20 @@ live once you've seen it behave sensibly in dry run.
 
 ## Deployment
 
+The React dashboard can be deployed to Vercel. In the Vercel project, set
+**Root Directory** to `frontend`; `frontend/vercel.json` configures `npm ci`,
+`npm run build`, and the `dist` output. Add this public frontend variable:
+
+```env
+VITE_API_URL=https://your-backend-domain.example
+```
+
+Run the Python bot and Flask API on a persistent host such as a VPS, Render,
+Railway, or Fly.io. They require long-running WebSocket connections, position
+monitoring, SQLite state, and access to private trading credentials. Never put
+`WALLET_PRIVATE_KEY`, RPC credentials, or API secrets in Vercel frontend
+variables.
+
 Same pattern as any long-running bot — a small VPS with `systemd`:
 
 ```ini
