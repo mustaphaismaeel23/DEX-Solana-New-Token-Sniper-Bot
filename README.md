@@ -44,14 +44,35 @@ funds are used.
   live DexScreener pair as PumpSwap before an entry.
 - Any source outside the centralized allowlist is rejected.
 
+**Established Token Scanning** (`established_scanner.py`)
+- Optionally enabled via `WATCH_ESTABLISHED_TOKENS=true`
+- Periodically scans trending and top-performing tokens from major DEXes:
+  Raydium, Orca, Meteora, Invariant, and others
+- Targets tokens with proven liquidity, volume, and market history
+- Uses relaxed utility and volume requirements (designed for mature tokens)
+- Checks tokens are 30+ days old with consistent trading activity
+- Updates every `DEXSCREENER_CHECK_INTERVAL_SECONDS` (default: 60 seconds)
+
 **Filtering** (`safety_checks.py`) — a candidate must pass ALL of:
 1. Mint authority renounced (creator can't mint unlimited new supply)
 2. Freeze authority renounced (creator can't freeze your tokens)
 3. Top holder owns less than `MAX_TOP_HOLDER_PCT`% of supply
 4. Liquidity (DexScreener) above `MIN_LIQUIDITY_USD`
-5. Utility evidence score above `MIN_UTILITY_SCORE`, based on public website/social metadata, 24h volume, and volume/liquidity turnover
+5. Utility evidence score above `MIN_UTILITY_SCORE`, based on:
+   - Public website/social media presence
+   - 24h volume and volume/liquidity turnover
+   - **Twitter/X community signals** (followers, engagement, sentiment)
 6. Token age between `MIN_TOKEN_AGE_SECONDS` and `MAX_TOKEN_AGE_SECONDS`
   (waits for six hours of proof and skips stale candidates after 24 hours)
+
+**Twitter/X Social Signals** (`twitter_signals.py`) — optional but recommended:
+- Analyzes project Twitter presence and community engagement
+- Checks verified accounts and follower count
+- Analyzes 24h tweet sentiment (bullish vs bearish)
+- Scores account credibility and community buzz
+- Detects red flags: low engagement, negative sentiment
+- Adds up to 40 points to utility score (out of 100)
+- Can be disabled or configured as optional via `ENABLE_TWITTER_SIGNALS`
 
 The utility score is an evidence filter, not a promise of product quality or
 profit. It deliberately rejects tokens when public market/project data is
@@ -119,6 +140,13 @@ Fill in `.env`:
 - **PUMPSWAP_PROGRAM_ID** — required for the on-chain PumpSwap pool-owner
   adapter. Leave live trading disabled until this is verified against the
   current PumpSwap deployment.
+- **TWITTER_BEARER_TOKEN** — optional but recommended for social signal analysis.
+  Get it by:
+  1. Sign up for X/Twitter Developer Account at https://developer.twitter.com
+  2. Create an app in the Developer Portal
+  3. Generate an API key with read-only access
+  4. Copy the Bearer Token and add to `.env` as `TWITTER_BEARER_TOKEN=<your_token>`
+  Without this token, Twitter signal analysis is disabled but the bot still works.
 
 ## Dashboard
 
@@ -182,6 +210,15 @@ WantedBy=multi-user.target
 
 | Setting | What it does |
 |---|---|
+| `WATCH_ESTABLISHED_TOKENS` | Enable scanning of established tokens (Raydium, Orca, etc.) alongside new tokens |
+| `DEXSCREENER_CHECK_INTERVAL_SECONDS` | How often to scan for new established tokens (default 60 seconds) |
+| `ENABLE_TWITTER_SIGNALS` | Enable Twitter/X social signal analysis (default true) |
+| `TWITTER_BEARER_TOKEN` | X/Twitter API v2 bearer token for social analysis (get from https://developer.twitter.com) |
+| `MIN_TWITTER_FOLLOWERS` | Minimum followers for Twitter account credibility (default 100) |
+| `MIN_TWITTER_ENGAGEMENT_RATE` | Minimum engagement rate for tweets (default 0.1%) |
+| `TWITTER_SENTIMENT_THRESHOLD` | Minimum positive sentiment score (0-100, default 30) |
+| `REQUIRE_TWITTER_PRESENCE` | Reject tokens with no Twitter account (default false) |
+| `TWITTER_MENTION_WEIGHT` | Points added to utility score for Twitter presence (default 15/40 max) |
 | `BUY_SIZE_SOL` | Fixed SOL spent per snipe |
 | `MAX_CONCURRENT_POSITIONS` | Caps total exposure at once |
 | `MIN_LIQUIDITY_USD` | Liquidity floor to even consider a token |
@@ -191,9 +228,17 @@ WantedBy=multi-user.target
 | `HARD_STOP_LOSS_PCT` | Loss % that force-sells regardless of the trailing logic |
 | `MAX_HOLD_SECONDS` | Force-exit timeout for dead positions |
 | `SLIPPAGE_BPS` | Wider than the copy-trade bot by default (500 = 5%) since new-token pools are thin and volatile |
-| `MIN_UTILITY_SCORE` | Minimum public utility-evidence score required before buying |
-| `MIN_24H_VOLUME_USD` | Minimum DexScreener 24-hour volume used by the utility score |
+| `MIN_TOKEN_AGE_SECONDS` | Minimum age for new tokens (Pump.fun/PumpSwap) — default 6 hours |
+| `MAX_TOKEN_AGE_SECONDS` | Maximum age for new tokens — default 24 hours |
+| `MIN_ESTABLISHED_TOKEN_AGE_SECONDS` | Minimum age for established tokens — default 30 days |
+| `MAX_ESTABLISHED_TOKEN_AGE_SECONDS` | Maximum age for established tokens — default 90 days (set to 0 to disable) |
+| `MIN_UTILITY_SCORE` | Minimum public utility-evidence score for new tokens (default 70) |
+| `MIN_ESTABLISHED_UTILITY_SCORE` | Minimum utility score for established tokens — relaxed default 50 |
+| `MIN_24H_VOLUME_USD` | Minimum 24-hour volume for new tokens |
+| `MIN_ESTABLISHED_24H_VOLUME_USD` | Minimum 24-hour volume for established tokens — relaxed requirement |
 | `MIN_VOLUME_LIQUIDITY_RATIO` | Minimum 24-hour volume divided by liquidity used by the utility score |
+| `MIN_24H_TRANSACTIONS` | Minimum transactions in 24h for new tokens |
+| `MIN_ESTABLISHED_24H_TRANSACTIONS` | Minimum transactions for established tokens — relaxed requirement |
 | `MIN_RISK_SCORE` | Minimum weighted risk score (default 65) |
 | `MAX_POSITION_SIZE_MULTIPLIER` | Absolute cap applied after risk-based sizing |
 | `DAILY_LOSS_THRESHOLD_SOL` | Loss threshold that triggers emergency stop |

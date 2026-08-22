@@ -36,6 +36,7 @@ async def try_buy(client: httpx.AsyncClient, rpc: AsyncClient, keypair, candidat
     breaker = breaker or get_circuit_breaker()
     mint = candidate["mint"]
     source = candidate["source"]
+    is_established = candidate.get("is_established", False)
 
     allowed, allowlist_reason = validate_discovery(candidate)
     if not allowed:
@@ -47,11 +48,27 @@ async def try_buy(client: httpx.AsyncClient, rpc: AsyncClient, keypair, candidat
         return
 
     age = _event_age_seconds(candidate.get("created_at"))
-    if age < settings.MIN_TOKEN_AGE_SECONDS:
-        record_skip(mint, source, f"too new ({age:.0f}s; min {settings.MIN_TOKEN_AGE_SECONDS}s)")
+    
+    # Use different age requirements based on token type
+    if is_established:
+        min_age = settings.MIN_ESTABLISHED_TOKEN_AGE_SECONDS
+        max_age = settings.MAX_ESTABLISHED_TOKEN_AGE_SECONDS
+    else:
+        min_age = settings.MIN_TOKEN_AGE_SECONDS
+        max_age = settings.MAX_TOKEN_AGE_SECONDS
+    
+    if age < min_age:
+        if is_established:
+            record_skip(mint, source, f"not established yet ({age/86400:.1f} days; min {min_age/86400:.0f} days)")
+        else:
+            record_skip(mint, source, f"too new ({age:.0f}s; min {min_age}s)")
         return
-    if age > settings.MAX_TOKEN_AGE_SECONDS:
-        record_skip(mint, source, f"too old ({age:.0f}s)")
+    
+    if max_age > 0 and age > max_age:
+        if is_established:
+            record_skip(mint, source, f"too old ({age/86400:.1f} days; max {max_age/86400:.0f} days)")
+        else:
+            record_skip(mint, source, f"too old ({age:.0f}s)")
         return
 
     if open_position_count() >= settings.MAX_CONCURRENT_POSITIONS:
@@ -66,7 +83,7 @@ async def try_buy(client: httpx.AsyncClient, rpc: AsyncClient, keypair, candidat
             return
 
     try:
-        ok, reason = await run_all_checks(client, rpc, mint)
+        ok, reason = await run_all_checks(client, rpc, mint, is_established)
     except Exception as e:
         breaker.record_event("safety checks failed", emergency=True)
         record_skip(mint, source, f"safety checks failed closed: {e}")

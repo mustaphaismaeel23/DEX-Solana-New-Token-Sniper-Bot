@@ -10,6 +10,7 @@ from solders.pubkey import Pubkey
 from solana.rpc.async_api import AsyncClient
 from config import settings
 from jupiter_swap import get_quote
+from twitter_signals import check_twitter_signals
 
 log = logging.getLogger("safety_checks")
 
@@ -171,10 +172,12 @@ async def check_liquidity(client: httpx.AsyncClient, mint: str) -> tuple[bool, s
         return False, f"liquidity check failed: {e}"
 
 
-async def check_utility_signals(client: httpx.AsyncClient, mint: str) -> tuple[bool, str]:
+async def check_utility_signals(client: httpx.AsyncClient, mint: str, is_established: bool = False, pair_info: dict | None = None) -> tuple[bool, str]:
     """Require public traction and project metadata before a live buy.
 
     These are utility proxies, not proof of product quality or profitability.
+    For established tokens, requirements are relaxed since they have real market history.
+    Includes Twitter/X social signal analysis for community engagement verification.
     """
     if not settings.REQUIRE_UTILITY_SIGNALS:
         return True, "utility signal gate disabled"
@@ -199,44 +202,122 @@ async def check_utility_signals(client: httpx.AsyncClient, mint: str) -> tuple[b
         websites = info.get("websites") or []
         socials = info.get("socials") or []
         volume_ratio = volume_24h / liquidity if liquidity > 0 else 0
+        
+        # Extract token name and symbol
+        token_name = info.get("name") or pair.get("baseToken", {}).get("name") or ""
+        token_symbol = pair.get("baseToken", {}).get("symbol") or ""
+
+        # Use different thresholds for established tokens
+        min_volume = settings.MIN_ESTABLISHED_24H_VOLUME_USD if is_established else settings.MIN_24H_VOLUME_USD
+        min_utility_score = settings.MIN_ESTABLISHED_UTILITY_SCORE if is_established else settings.MIN_UTILITY_SCORE
+        min_txns = settings.MIN_ESTABLISHED_24H_TRANSACTIONS if is_established else settings.MIN_24H_TRANSACTIONS
 
         if liquidity < settings.MIN_LIQUIDITY_USD:
             return False, f"liquidity ${liquidity:,.0f} below min ${settings.MIN_LIQUIDITY_USD:,.0f}"
-        if volume_24h < settings.MIN_24H_VOLUME_USD:
-            return False, f"24h volume ${volume_24h:,.0f} below min ${settings.MIN_24H_VOLUME_USD:,.0f}"
+        if volume_24h < min_volume:
+            return False, f"24h volume ${volume_24h:,.0f} below min ${min_volume:,.0f}"
         if not settings.MIN_VOLUME_LIQUIDITY_RATIO <= volume_ratio <= settings.MAX_VOLUME_LIQUIDITY_RATIO:
             return False, f"volume/liquidity ratio {volume_ratio:.2f} outside {settings.MIN_VOLUME_LIQUIDITY_RATIO:.1f}-{settings.MAX_VOLUME_LIQUIDITY_RATIO:.1f}"
-        if transaction_count < settings.MIN_24H_TRANSACTIONS:
-            return False, f"only {transaction_count} transactions in 24h (min {settings.MIN_24H_TRANSACTIONS})"
+        if transaction_count < min_txns:
+            return False, f"only {transaction_count} transactions in 24h (min {min_txns})"
         if price_change_24h >= settings.MAX_24H_PRICE_CHANGE_PCT:
             return False, f"already up {price_change_24h:.0f}% in 24h; do not chase"
 
         score = 0
         evidence = []
+        
+        # Traditional on-chain signals
         if websites:
             score += 25
             evidence.append("website")
         if socials:
             score += 15
             evidence.append("socials")
-        if volume_24h >= settings.MIN_24H_VOLUME_USD:
+        if volume_24h >= min_volume:
             score += 35
             evidence.append(f"24h volume ${volume_24h:,.0f}")
         if settings.MIN_VOLUME_LIQUIDITY_RATIO <= volume_ratio <= settings.MAX_VOLUME_LIQUIDITY_RATIO:
             score += 25
             evidence.append(f"volume/liquidity {volume_ratio:.2f}")
+        
+        # Twitter/X social signals
+        twitter_scores, twitter_evidence = await check_twitter_signals(
+            client, token_name, token_symbol, pair_info or info
+        )
+        
+        if twitter_scores.get("twitter_found"):
+            score += int(twitter_scores.get("total_points", 0))
+            if twitter_evidence:
+                evidence.append(twitter_evidence)
+            
+            # Sentiment check - too negative sentiment is a red flag
+            sentiment = twitter_scores.get("sentiment_score", 0)
+            if sentiment < 20:  # Very negative sentiment
+                score = max(0, score - 15)  # Penalize heavily
+                evidence.append(f"⚠️ negative sentiment {sentiment:.0f}%")
+        else:
+            # No Twitter found - minor penalty
+            if settings.REQUIRE_TWITTER_PRESENCE and not is_established:
+                score -= 20
 
-        if score < settings.MIN_UTILITY_SCORE:
+        if score < min_utility_score:
             return False, (
                 f"utility evidence score {score}/100 below min "
-                f"{settings.MIN_UTILITY_SCORE} ({', '.join(evidence) or 'no public signals'})"
+                f"{min_utility_score} ({', '.join(evidence) or 'no public signals'})"
             )
         return True, f"utility evidence score {score}/100 ({', '.join(evidence)})"
     except Exception as e:
         return False, f"utility signal check failed: {e}"
 
 
-async def run_all_checks(client: httpx.AsyncClient, rpc: AsyncClient, mint: str) -> tuple[bool, str]:
+async def check_token_age(client: httpx.AsyncClient, mint: str, is_established: bool = False) -> tuple[bool, str]:
+    """Check if token age is within acceptable bounds.
+    
+    New tokens (Pump.fun): must be 6-24 hours old
+    Established tokens: must be 30+ days old (optionally max 90 days)
+    """
+    try:
+        resp = await client.get(DEXSCREENER_TOKEN_URL.format(mint=mint), timeout=10)
+        resp.raise_for_status()
+        pairs = resp.json().get("pairs") or []
+        if not pairs:
+            return False, "no pair data for age check"
+        
+        pair = max(pairs, key=lambda item: float((item.get("liquidity") or {}).get("usd") or 0))
+        pair_created_at = pair.get("pairCreatedAt")
+        
+        if not pair_created_at:
+            return False, "creation timestamp unavailable"
+        
+        age_seconds = time.time() - float(pair_created_at) / 1000
+        
+        if is_established:
+            # Established token requirements
+            min_age = settings.MIN_ESTABLISHED_TOKEN_AGE_SECONDS
+            max_age = settings.MAX_ESTABLISHED_TOKEN_AGE_SECONDS
+            if age_seconds < min_age:
+                days_needed = (min_age - age_seconds) / 86400
+                return False, f"token only {age_seconds/86400:.1f} days old; need {min_age/86400:.0f} days"
+            if max_age > 0 and age_seconds > max_age:
+                days_old = age_seconds / 86400
+                return False, f"token {days_old:.0f} days old, exceeds max {max_age/86400:.0f} days"
+            return True, f"token {age_seconds/86400:.1f} days old (acceptable)"
+        else:
+            # New token requirements (Pump.fun/PumpSwap)
+            min_age = settings.MIN_TOKEN_AGE_SECONDS
+            max_age = settings.MAX_TOKEN_AGE_SECONDS
+            if age_seconds < min_age:
+                hours_needed = (min_age - age_seconds) / 3600
+                return False, f"too fresh: {age_seconds/3600:.1f}h old; wait {hours_needed:.1f}h more"
+            if age_seconds > max_age:
+                hours_old = age_seconds / 3600
+                return False, f"too stale: {hours_old:.1f}h old; exceeded max {max_age/3600:.1f}h"
+            return True, f"age {age_seconds/3600:.1f}h (acceptable)"
+    except Exception as e:
+        return False, f"age check failed: {e}"
+
+
+async def run_all_checks(client: httpx.AsyncClient, rpc: AsyncClient, mint: str, is_established: bool = False) -> tuple[bool, str]:
     ok, reason = await check_mint_and_freeze_authority(rpc, mint)
     if not ok:
         return False, reason
@@ -248,8 +329,21 @@ async def run_all_checks(client: httpx.AsyncClient, rpc: AsyncClient, mint: str)
     ok, reason = await check_liquidity(client, mint)
     if not ok:
         return False, reason
+    
+    ok, reason = await check_token_age(client, mint, is_established)
+    if not ok:
+        return False, reason
 
-    ok, reason = await check_utility_signals(client, mint)
+    # Fetch pair info for Twitter analysis
+    try:
+        resp = await client.get(DEXSCREENER_TOKEN_URL.format(mint=mint), timeout=10)
+        resp.raise_for_status()
+        pairs = resp.json().get("pairs") or []
+        pair_info = max(pairs, key=lambda item: float((item.get("liquidity") or {}).get("usd") or 0)) if pairs else None
+    except:
+        pair_info = None
+
+    ok, reason = await check_utility_signals(client, mint, is_established, pair_info)
     if not ok:
         return False, reason
 

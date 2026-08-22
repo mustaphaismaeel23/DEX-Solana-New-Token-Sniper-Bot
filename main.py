@@ -7,6 +7,7 @@ from config import settings
 from database import init_db, clear_stop_request, is_stop_requested
 from jupiter_swap import load_keypair, get_sol_balance
 from pump_scanner import watch_pumpfun, watch_pumpswap
+from established_scanner import watch_established_tokens
 from buyer import try_buy
 from position_manager import check_positions
 from notifier import notify
@@ -55,7 +56,7 @@ async def main_loop():
     clear_stop_request()
     keypair = load_keypair()
     log.info(f"Bot wallet: {keypair.pubkey()}")
-    log.info(f"Watching pump.fun={settings.WATCH_PUMPFUN} PumpSwap={settings.WATCH_PUMPSWAP}")
+    log.info(f"Watching pump.fun={settings.WATCH_PUMPFUN} PumpSwap={settings.WATCH_PUMPSWAP} Established={settings.WATCH_ESTABLISHED_TOKENS}")
     log.info(f"DRY_RUN = {settings.DRY_RUN}")
 
     queue: asyncio.Queue = asyncio.Queue()
@@ -79,6 +80,8 @@ async def main_loop():
             tasks.append(asyncio.create_task(watch_pumpfun(queue)))
         if settings.WATCH_PUMPSWAP:
             tasks.append(asyncio.create_task(watch_pumpswap(queue)))
+        if settings.WATCH_ESTABLISHED_TOKENS:
+            tasks.append(asyncio.create_task(watch_established_tokens(queue, client)))
 
         watcher = asyncio.create_task(stop_watcher(tasks))
         try:
